@@ -9,33 +9,43 @@ import numpy as np
 from ode_data_loader import dataloader_ode
 from ode_model import f, ODEBlock, ODENet
 from torch.optim.lr_scheduler import StepLR
+import random
 
+# Change fpath to where your data set is located
 fpath = 'where_csv_file_is_located.csv'
 train_loader = DataLoader(dataloader_ode(filepath=fpath,train=True),batch_size=24, shuffle=False)
 test_loader = DataLoader(dataloader_ode(filepath=fpath,train=False),batch_size=25, shuffle=False)
 scale_max = 4000.0
-scale_min = 1785
+scale_min = 1785 # min value in the train data set
 new_max = 1.0
 new_min = -1.0
 
 scale_maxy = 4000.0
-scale_miny = 1820
+scale_miny = 1820 # min value in the test data set
 new_maxy = 1.0
 new_miny = -1.0
 
 def train(args, model, device, train_loader, optimizer, loss_func, epoch):
     model.train()
+    train_loss = 0
     for batch_idx, batch in enumerate(train_loader):
-        x, y = batch.to(device)
+        x, y = batch
+        x = x.to(device)
+        y = y.to(device)
         optimizer.zero_grad()
         x_len = np.rint(len(x)/2)
         
         x_learn = x[0:int(x_len),1:]
+        rand_n = random.random()
+        if (epoch >= 10) & (rand_n > 0.25):
+            add_rand = torch.rand((x_learn.shape[0],12))*((1+epoch)/2000)
+            x_learn += add_rand
         y_trgt = x[:,0].clone()
         future_periods = len(x) - len(x_learn)
         
         preds = model(x_learn, future_periods)
         loss = loss_func(preds.squeeze(0), y_trgt)
+        train_loss += loss.item()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3)
         optimizer.step()
@@ -44,14 +54,18 @@ def train(args, model, device, train_loader, optimizer, loss_func, epoch):
                 epoch, batch_idx * len(x), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader), loss.item()))
             if args.dry_run:
-                break  
+                break
+    return train_loss / batch_idx  
             
 def test(model, device, test_loader, loss_func, prediction=False):
     model.eval()
     test_loss = 0
+    
     with torch.no_grad():
         for batch_idx, batch in test_loader:
-            x, y = batch.to(device)
+            x, y = batch
+            x = x.to(device)
+            y = y.to(device)
             len_data = len(x)
             x_len = np.rint(len(x)/2)
             y = x[:,0].clone()
@@ -60,7 +74,7 @@ def test(model, device, test_loader, loss_func, prediction=False):
             else:
                 x_learn = x[0:,1:]
             
-            future_periods = x_len = len(x_learn)
+            future_periods = len_data - len(x_learn)
             
             if prediction == True:
                 future_periods = 13
@@ -70,25 +84,29 @@ def test(model, device, test_loader, loss_func, prediction=False):
             loss = loss_func(outputs.squeeze(0)[0:int(len(y))], y)
             test_loss += loss.item()
             
-        outputs = (outputs.squeeze() - torch.Tensor([new_min]))/(torch.Tensor([new_max-new_min])*torch.Tensor([scale_max-scale_min])+torch.Tensor([scale_min]))
-        y = (y.squeeze() - torch.Tensor([new_miny]))/(torch.Tensor([new_maxy-new_miny])*torch.Tensor([scale_maxy-scale_miny])+torch.Tensor([scale_miny]))
+        outputs = ((outputs.squeeze() - torch.Tensor([new_min]))/(torch.Tensor([new_max-new_min]))*torch.Tensor([scale_max-scale_min])+torch.Tensor([scale_min]))
+        y = ((y.squeeze() - torch.Tensor([new_miny]))/(torch.Tensor([new_maxy-new_miny]))*torch.Tensor([scale_maxy-scale_miny])+torch.Tensor([scale_miny]))
         
         print('\nTest set: Average loss: {:.4f}\n'.format(
             test_loss))
-        print("\nPredicted Values: {:.4f}\n".format(outputs))     
-        print("\nTarget Values: {:.4f}\n".format(y))
+        print("\nPredicted Values: ")
+        print(round(outputs.detach().numpy())) 
+        print("\nTarget Values: ")
+        print(y.detach().numpy())
+        print("\n")
+        return test_loss
         
-def main():
+def main(load_weights=False, weight_fpath=None):
     # Training settings
     parser = argparse.ArgumentParser(description = 'PyTorch ODE Time Series Example')
     parser.add_argument('--batch-size', type=int, default=24, metavar='N',
                         help='input batch size for training (default: 24)')
-    parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
+    parser.add_argument('--test-batch-size', type=int, default=24, metavar='N',
                         help='input batch size for testing (default: 25)')
     parser.add_argument('--epochs', type=int, default=200, metavar='N',
                         help='number of epochs to train (default: 200)')
     parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
-                        help='learning rate (default: 1.0)')
+                        help='learning rate (default: 0.001)')
     parser.add_argument('--gamma', type=float, default=0.7, metavar='M',
                         help='Learning rate step gamma (default: 0.7)')
     parser.add_argument('--no-cuda', action='store_true', default=False,
@@ -126,19 +144,25 @@ def main():
         test_kwargs.update(cuda_kwargs)
         
     model = ODENet(in_dim=12, mid_dim=200, out_dim=1).to(device)
+    if (load_weights == True) and (weight_fpath is not None):
+        model.load_state_dict(torch.load(weight_fpath))
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr,momentum=0.9)
     loss_func = nn.MSELoss(reduction='sum')
     
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
+    min_test_loss = 100000
     for epoch in range(1, args.epochs + 1):
-        train(args, model, device,train_loader,optimizer,loss_func,epoch)
-        test(model, device, test_loader, loss_func, prediction=False)
+        train_loss = train(args, model, device,train_loader,optimizer,loss_func,epoch)
+        test_loss = test(model, device, test_loader, loss_func, prediction=False)
         scheduler.step()
+        if test_loss < min_test_loss:
+            min_test_loss = test_loss
+            torch.save(model.state_dict(), "ode_time_series.pt")
         
     if args.save_model:
         torch.save(model.state_dict(), "ode_time_series.pt")     
         
 if __name__ == '__main__':
-    main()
+    main(load_weights=False, weight_fpath=None)
              
         

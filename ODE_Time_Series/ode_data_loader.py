@@ -31,13 +31,15 @@ class dataloader_ode(Dataset):
     def __init__(self, filepath, train=True):
         super(dataloader_ode,self).__init__()
         self.df = pd.read_csv(filepath)
-        num_rows_train = round(.8*self.df.shape[0])
+        num_rows_train = round(.85*self.df.shape[0])
 
         if train == True:
             self.df = self.df.iloc[0:num_rows_train,:]
+        else:
+            self.df = self.df.iloc[num_rows_train:,:]
             
         self.scale_max = 4000.0
-        self.scale_min = self.df.min().min()
+        self.scale_min = self.df.min().min() # (self.df.iloc[:,0].min()) for the dataset I used
         self.new_max = 1.0
         self.new_min = -1.0
         
@@ -51,7 +53,10 @@ class dataloader_ode(Dataset):
         df_x = (scaler_df - self.scale_min)/(self.scale_max - self.scale_min)*(self.new_max-self.new_min) + self.new_min
         df_y = (scaler_trgt - self.scale_min)/(self.scale_max - self.scale_min)*(self.new_max-self.new_min) + self.new_min
         
-        return torch.Tensor([df_x]).float(), torch.Tensor([df_y],torch.float).float()
+        df_x = torch.Tensor([df_x.to_numpy()]).squeeze(0).float()
+        df_y = torch.Tensor([df_y.to_numpy()]).squeeze(0).float()
+        
+        return df_x, df_y
 
 
 

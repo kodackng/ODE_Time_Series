@@ -3,7 +3,7 @@ import torch.nn as nn
 import torchdiffeq
 from torchdiffeq import odeint_adjoint as odeadj
 
-class f(nn.module):
+class f(nn.Module):
     """_summary_
 
     Args:
@@ -36,7 +36,7 @@ class ODEBlock(nn.Module):
         use_adjoint (bool): 
         integration_time (float): time steps
     """
-    def __init_(self, f, solver: str = 'dopri5', rtol: float = 1e-4,
+    def __init__(self, f, solver: str = 'dopri5', rtol: float = 1e-4,
                 atol: float = 1e-4, adjoint: bool = True, autonomous: bool = True):
         super(ODEBlock, self).__init__()
         self.odefunc = f
